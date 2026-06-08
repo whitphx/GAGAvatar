@@ -15,6 +15,12 @@ def render_gaussian(gs_params, cam_matrix, cam_params=None, sh_degree=0, bg_colo
         gs_params['xyz'], gs_params['colors'], gs_params['opacities'], gs_params['scales'], gs_params['rotations']
     view_mat, proj_mat, cam_pos = build_camera_matrices(cam_matrix, focal_x, focal_y)
     bg_color = cam_matrix.new_zeros(batch_size, NUM_CHANNELS, dtype=torch.float32) if bg_color is None else bg_color
+    if bg_color.dim() == 1:
+        bg_color = bg_color[None].expand(batch_size, -1)
+    if bg_color.shape != (batch_size, NUM_CHANNELS):
+        raise ValueError(f"Invalid background shape: {tuple(bg_color.shape)}")
+    if cam_size[0] <= 0 or cam_size[1] <= 0 or cam_size[0] > 4096 or cam_size[1] > 4096:
+        raise ValueError(f"Invalid Gaussian render size: {cam_size}")
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
     means2D = torch.zeros_like(points, dtype=points.dtype, requires_grad=True, device="cuda") + 0
     try:
@@ -25,7 +31,7 @@ def render_gaussian(gs_params, cam_matrix, cam_params=None, sh_degree=0, bg_colo
     all_rendered, all_radii = [], []
     for bid in range(batch_size):
         raster_settings = GaussianRasterizationSettings(
-            sh_degree=sh_degree, bg=bg_color, 
+            sh_degree=sh_degree, bg=bg_color[bid].contiguous(),
             image_height=cam_size[0], image_width=cam_size[1],
             tanfovx=1.0 / focal_x, tanfovy=1.0 / focal_y,
             viewmatrix=view_mat[bid], projmatrix=proj_mat[bid], campos=cam_pos[bid],
