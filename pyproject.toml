@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gagavatar"
 version = "0.1.0"
-description = "GAGAvatar runtime and Gaussian avatar export helpers"
+description = "GAGAvatar runtime for external integrations"
 readme = "README.md"
 requires-python = ">=3.10"
 
