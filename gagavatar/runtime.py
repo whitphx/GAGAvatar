@@ -20,6 +20,7 @@ import torch
 import torchvision
 from pytorch3d.transforms import axis_angle_to_matrix
 
+from gagavatar.assets import GAGAvatarAssets
 from gagavatar.libs.flame_model import FLAMEModel
 from gagavatar.libs.utils_renderer import render_gaussian
 from gagavatar.models import GAGAvatar
@@ -30,25 +31,33 @@ GAGAVATAR_HEAD_GAUSSIAN_COUNT = 5023
 
 @dataclass(frozen=True)
 class GAGAvatarRuntimeConfig:
-    model_path: Path | str
+    asset_dir: Path | str | None = None
+    assets: GAGAvatarAssets | None = None
+    model_path: Path | str | None = None
     tracked_path: Path | str | None = None
     flame_model_path: Path | str | None = None
     device: str = "auto"
     point_plane_size: int = 296
     flame_scale: float = 5.0
 
+    def resolved_assets(self) -> GAGAvatarAssets:
+        if self.assets is not None:
+            return self.assets
+        return GAGAvatarAssets.resolve(
+            root=self.asset_dir,
+            model_path=self.model_path,
+            tracked_path=self.tracked_path,
+            flame_model_path=self.flame_model_path,
+        )
+
     def resolved_model_path(self) -> Path:
-        return Path(self.model_path).expanduser().resolve()
+        return self.resolved_assets().model_path
 
     def resolved_tracked_path(self) -> Path | None:
-        if self.tracked_path is None:
-            return None
-        return Path(self.tracked_path).expanduser().resolve()
+        return self.resolved_assets().tracked_path
 
     def resolved_flame_model_path(self) -> Path | None:
-        if self.flame_model_path is None:
-            return None
-        return Path(self.flame_model_path).expanduser().resolve()
+        return self.resolved_assets().flame_model_path
 
 
 class GAGAvatarRuntime:
@@ -56,9 +65,11 @@ class GAGAvatarRuntime:
 
     def __init__(self, config: GAGAvatarRuntimeConfig):
         self.config = config
+        self.assets = config.resolved_assets()
+        self.assets.validate()
         self.device = select_device(config.device)
         self.model = GAGAvatar().to(self.device).eval()
-        checkpoint = torch.load(config.resolved_model_path(), map_location="cpu", weights_only=False)
+        checkpoint = torch.load(self.assets.model_path, map_location="cpu", weights_only=False)
         state = checkpoint.get("model", checkpoint)
         state = {key: value for key, value in state.items() if "percep_loss" not in key}
         self.model.load_state_dict(state, strict=False)
@@ -67,9 +78,9 @@ class GAGAvatarRuntime:
             n_exp=100,
             scale=config.flame_scale,
             no_lmks=True,
-            model_path=config.resolved_flame_model_path(),
+            model_path=self.assets.flame_model_path,
         ).to(self.device)
-        self.tracked_avatars = self._load_tracked_avatars(config.resolved_tracked_path())
+        self.tracked_avatars = self._load_tracked_avatars(self.assets.tracked_path)
         self._tracked_avatar = None
         self._tracked_name = None
         self._feature_batch = None

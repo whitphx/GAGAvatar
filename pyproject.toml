@@ -9,6 +9,12 @@ description = "GAGAvatar runtime for external integrations"
 readme = "README.md"
 requires-python = ">=3.10"
 
+[project.scripts]
+gagavatar-assets = "gagavatar.assets:main"
+
 [tool.setuptools.packages.find]
 include = ["gagavatar*"]
 namespaces = true
+
+[tool.setuptools.package-data]
+gagavatar = ["assets_manifest.json"]

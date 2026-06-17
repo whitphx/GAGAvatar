@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "assets": [
+    {
+      "name": "gagavatar_model",
+      "path": "GAGAvatar.pt",
+      "required": true,
+      "source": {
+        "type": "huggingface",
+        "repo_id": "xg-chu/GAGAvatar",
+        "revision": "main",
+        "filename": "assets/GAGAvatar.pt"
+      },
+      "size": 747434426,
+      "sha256": "75d449fd1d67dd7bbc613cef17f0196b1c84766935adc75d5231bc89e33950f8",
+      "license_note": "See upstream xg-chu/GAGAvatar model card."
+    },
+    {
+      "name": "flame_with_eye",
+      "path": "FLAME_with_eye.pt",
+      "required": false,
+      "manual": true,
+      "size": 26819643,
+      "sha256": "b87a1d3513b3df0504f1e1f93bcb85ac01abe4dadf92e75ac08046c4a68403be",
+      "note": "FLAME assets have separate access and licensing terms. Download or provide this file manually."
+    },
+    {
+      "name": "tracker_resources",
+      "path": "GAGAvatar_track/track_resources.tar",
+      "required": false,
+      "manual": true,
+      "source": {
+        "type": "huggingface",
+        "repo_id": "xg-chu/GAGAvatar_track",
+        "revision": "main",
+        "filename": "track_resources.tar"
+      },
+      "note": "Tracker resources are large and not needed by the packaged renderer runtime. Use the upstream GAGAvatar_track setup when packaging the tracker."
+    }
+  ]
+}
