@@ -20,9 +20,9 @@ import torch
 import torchvision
 from pytorch3d.transforms import axis_angle_to_matrix
 
-from core.libs.flame_model import FLAMEModel
-from core.libs.utils_renderer import render_gaussian
-from core.models import GAGAvatar
+from gagavatar.libs.flame_model import FLAMEModel
+from gagavatar.libs.utils_renderer import render_gaussian
+from gagavatar.models import GAGAvatar
 
 
 GAGAVATAR_HEAD_GAUSSIAN_COUNT = 5023

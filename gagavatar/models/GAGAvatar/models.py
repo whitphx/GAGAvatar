@@ -7,9 +7,9 @@ import torchvision
 import torch.nn as nn
 from pytorch3d.renderer.implicit.harmonic_embedding import HarmonicEmbedding
 
-from core.models.modules import DINOBase, StyleUNet
-from core.libs.utils_renderer import render_gaussian
-from core.libs.utils_perceptual import FacePerceptualLoss
+from gagavatar.models.modules import DINOBase, StyleUNet
+from gagavatar.libs.utils_renderer import render_gaussian
+from gagavatar.libs.utils_perceptual import FacePerceptualLoss
 
 class GAGAvatar(nn.Module):
     def __init__(self, model_cfg=None, **kwargs):
