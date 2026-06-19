@@ -146,7 +146,7 @@ class GAGAvatarRuntime:
             self._feature_batch = feature_batch
             self._shape_code = tracked["shapecode"][None].to(self.device)
 
-        feature_batch = deepcopy(self._feature_batch)
+        feature_batch = self._expand_feature_batch(motion_code.shape[0])
         exp_code = motion_code[:, :100]
         pose_code = torch.cat([motion_code.new_zeros(motion_code.shape[0], 3), motion_code[:, 103:]], dim=-1)
         t_points = self.flame_model(
@@ -155,15 +155,47 @@ class GAGAvatarRuntime:
             expression_params=exp_code,
             eye_pose_params=pose_code.new_zeros(motion_code.shape[0], 6),
         ).float()
-        if self._upper_points is None:
-            self._upper_points = t_points[:, FOREHEAD_INDICES]
-        else:
-            current_points = t_points[:, FOREHEAD_INDICES]
-            self._upper_points = 0.98 * self._upper_points + 0.02 * current_points
-            t_points[:, FOREHEAD_INDICES] = self._upper_points
+        t_points[:, FOREHEAD_INDICES] = self._smooth_upper_points(
+            t_points[:, FOREHEAD_INDICES]
+        )
         feature_batch["t_points"] = t_points
         feature_batch["t_transform"][:, :3, :3] = transform_emoca_to_p3d(motion_code[:, 100:103])[:, :3, :3]
         return feature_batch
+
+    def _expand_feature_batch(self, batch_size: int) -> dict:
+        if self._feature_batch is None:
+            raise RuntimeError("Feature batch is not initialized.")
+        return {
+            key: self._expand_feature_value(value, batch_size)
+            for key, value in self._feature_batch.items()
+        }
+
+    def _expand_feature_value(self, value, batch_size: int):
+        if isinstance(value, dict):
+            return {
+                key: self._expand_feature_value(item, batch_size)
+                for key, item in value.items()
+            }
+        if not torch.is_tensor(value):
+            return deepcopy(value)
+        if value.shape[0] == batch_size:
+            return value.clone()
+        if value.shape[0] != 1:
+            raise ValueError(
+                f"Cannot expand cached feature from batch {value.shape[0]} to {batch_size}."
+            )
+        return value.expand(batch_size, *value.shape[1:]).contiguous()
+
+    def _smooth_upper_points(self, current_points: torch.Tensor) -> torch.Tensor:
+        smoothed = []
+        for frame_points in current_points:
+            frame_points = frame_points[None]
+            if self._upper_points is None:
+                self._upper_points = frame_points
+            else:
+                self._upper_points = 0.98 * self._upper_points + 0.02 * frame_points
+            smoothed.append(self._upper_points[0])
+        return torch.stack(smoothed, dim=0)
 
     @torch.no_grad()
     def forward_gaussians(self, motion_code: torch.Tensor) -> dict:
