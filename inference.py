@@ -2,6 +2,9 @@
 # Copyright (c) Xuangeng Chu (xg.chu@outlook.com)
 
 import os
+from fractions import Fraction
+
+import av
 import torch
 import argparse
 import lightning
@@ -13,6 +16,25 @@ from core.data import DriverData
 from core.models import build_model
 from core.libs.utils import ConfigDict
 from core.libs.GAGAvatar_track.engines import CoreEngine as TrackEngine
+
+def write_video(output_path, video_frames, fps=25):
+    # torchvision.io.write_video is incompatible with PyAV >= 13 (float
+    # frame rates and string pict_type assignments are rejected), so write
+    # through PyAV directly.
+    height, width = video_frames.shape[1:3]
+    container = av.open(output_path, mode='w')
+    stream = container.add_stream('h264', rate=Fraction(fps).limit_denominator(1000))
+    stream.width = width
+    stream.height = height
+    stream.pix_fmt = 'yuv420p'
+    for frame_array in video_frames.cpu().numpy():
+        frame = av.VideoFrame.from_ndarray(frame_array, format='rgb24')
+        for packet in stream.encode(frame):
+            container.mux(packet)
+    for packet in stream.encode():
+        container.mux(packet)
+    container.close()
+
 
 def inference(image_path, driver_path, resume_path, force_retrack=False, device='cuda'):
     lightning.fabric.seed_everything(42)
@@ -82,7 +104,7 @@ def inference(image_path, driver_path, resume_path, force_retrack=False, device=
         feature_images = torch.stack([feature_data['image']]*merged_images.shape[0])
         merged_images = torch.cat([feature_images, merged_images], dim=-1)
         merged_images = (merged_images * 255.0).to(torch.uint8).permute(0, 2, 3, 1)
-        torchvision.io.write_video(dump_path, merged_images, fps=25.0)
+        write_video(dump_path, merged_images, fps=25)
     else:
         dump_path = os.path.join(dump_dir, f'{driver_name}_{feature_name}.jpg')
         merged_images = torchvision.utils.make_grid(images, nrow=5, padding=0)
