@@ -9,10 +9,10 @@ import numpy as np
 import torchvision
 from tqdm.rich import tqdm
 
-from core.data import DriverData
-from core.models import build_model
-from core.libs.utils import ConfigDict
-from core.libs.GAGAvatar_track.engines import CoreEngine as TrackEngine
+from gagavatar.data import DriverData
+from gagavatar.models import build_model
+from gagavatar.libs.utils import ConfigDict
+from gagavatar.libs.GAGAvatar_track.engines import CoreEngine as TrackEngine
 
 def inference(image_path, driver_path, resume_path, force_retrack=False, device='cuda'):
     lightning.fabric.seed_everything(42)

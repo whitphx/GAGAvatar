@@ -9,9 +9,9 @@ import numpy as np
 import torchvision
 from tqdm import tqdm
 
-from core.data import build_dataset
-from core.models import build_model
-from core.libs.utils import (
+from gagavatar.data import build_dataset
+from gagavatar.models import build_model
+from gagavatar.libs.utils import (
     ConfigDict, rtqdm, device_parser, 
     calc_parameters, biuld_logger, calc_psnr, calc_ssim
 )
