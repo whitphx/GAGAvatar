@@ -18,15 +18,17 @@ class FLAMEModel(nn.Module):
     Given flame parameters this class generates a differentiable FLAME function
     which outputs the a mesh and 2D/3D facial landmarks
     """
-    def __init__(self, n_shape, n_exp, scale=1.0, no_lmks=False):
+    def __init__(self, n_shape, n_exp, scale=1.0, no_lmks=False, model_path=None):
         super().__init__()
         self.scale = scale
         self.no_lmks = no_lmks
         # print("creating the FLAME Model")
         _abs_path = os.path.dirname(os.path.abspath(__file__))
         self.flame_path = os.path.join(_abs_path, '../../../assets')
+        if model_path is None:
+            model_path = os.path.join(self.flame_path, 'FLAME_with_eye.pt')
         self.flame_ckpt = torch.load(
-            os.path.join(self.flame_path, 'FLAME_with_eye.pt'), map_location='cpu', weights_only=True
+            model_path, map_location='cpu', weights_only=True
         )
         flame_model = self.flame_ckpt['flame_model']
         flame_lmk = self.flame_ckpt['lmk_embeddings']
