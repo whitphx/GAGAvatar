@@ -12,10 +12,10 @@ import numpy as np
 import torchvision
 from tqdm.rich import tqdm
 
-from core.data import DriverData
-from core.models import build_model
-from core.libs.utils import ConfigDict
-from core.libs.GAGAvatar_track.engines import CoreEngine as TrackEngine
+from gagavatar.data import DriverData
+from gagavatar.models import build_model
+from gagavatar.libs.utils import ConfigDict
+from gagavatar.libs.GAGAvatar_track.engines import CoreEngine as TrackEngine
 
 def write_video(output_path, video_frames, fps=25):
     # torchvision.io.write_video is incompatible with PyAV >= 13 (float

@@ -10,8 +10,8 @@ import numpy as np
 import torchvision
 from copy import deepcopy
 
-from core.libs.utils_lmdb import LMDBEngine
-from core.libs.flame_model import FLAMEModel
+from gagavatar.libs.utils_lmdb import LMDBEngine
+from gagavatar.libs.flame_model import FLAMEModel
 
 FOCAL_LENGTH = 12.0
 
