@@ -68,6 +68,17 @@ Prepare resources with:
 bash ./build_resources.sh
 ```
 
+When GAGAvatar is installed as a package, the asset manifest can be used
+instead:
+```
+gagavatar-assets download --root assets
+```
+
+This downloads only assets with explicit upstream sources and verifies known
+sizes and SHA-256 hashes. FLAME and tracker resources are represented in the
+manifest but are not downloaded automatically because they have separate setup
+or license requirements.
+
 Also prepare resources for GAGAvatar_track using: 
 ```
 cd core/libs/GAGAvatar_track
