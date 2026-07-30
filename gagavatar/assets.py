@@ -16,13 +16,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
-    try:
-        import tomli as tomllib
-    except ModuleNotFoundError:  # pragma: no cover - dependency-free fallback
-        tomllib = None
+import tomllib
 
 
 class AssetConfigError(RuntimeError):
@@ -57,54 +51,25 @@ class GAGAvatarAssets:
         )
 
     @classmethod
-    def from_artalk_assets(
-        cls,
-        artalk_assets,
-        *,
-        tracked_path: str | Path | None = None,
-    ) -> "GAGAvatarAssets":
-        root = Path(artalk_assets.root).expanduser().resolve() / "GAGAvatar"
-        return cls(
-            root=root,
-            model_path=root / "GAGAvatar.pt",
-            tracked_path=resolve_optional_path(tracked_path) or root / "tracked.pt",
-            flame_model_path=Path(artalk_assets.root).expanduser().resolve() / "FLAME_with_eye.pt",
-        )
-
-    @classmethod
     def from_pyproject(cls, project_root: str | Path | None = None) -> "GAGAvatarAssets":
         pyproject = find_pyproject(Path(project_root) if project_root else Path.cwd())
         data = load_pyproject(pyproject)
         gagavatar_assets = data.get("tool", {}).get("gagavatar", {}).get("assets", {})
-        artalk_assets = data.get("tool", {}).get("artalk", {}).get("assets", {})
 
         root = gagavatar_assets.get("root")
-        if root:
-            root_path = resolve_config_path(root, pyproject.parent)
-            flame_model = gagavatar_assets.get("flame_model")
-            tracked = gagavatar_assets.get("tracked")
-            return cls.from_root(
-                root_path,
-                flame_model_path=resolve_config_path(flame_model, pyproject.parent)
-                if flame_model
-                else None,
-                tracked_path=resolve_config_path(tracked, pyproject.parent)
-                if tracked
-                else None,
-            )
-
-        artalk_root = artalk_assets.get("root")
-        if artalk_root:
-            artalk_root_path = resolve_config_path(artalk_root, pyproject.parent)
-            return cls(
-                root=artalk_root_path / "GAGAvatar",
-                model_path=artalk_root_path / "GAGAvatar" / "GAGAvatar.pt",
-                tracked_path=artalk_root_path / "GAGAvatar" / "tracked.pt",
-                flame_model_path=artalk_root_path / "FLAME_with_eye.pt",
-            )
-
-        raise AssetConfigError(
-            f"Missing [tool.gagavatar.assets].root or [tool.artalk.assets].root in {pyproject}"
+        if not root:
+            raise AssetConfigError(f"Missing [tool.gagavatar.assets].root in {pyproject}")
+        root_path = resolve_config_path(root, pyproject.parent)
+        flame_model = gagavatar_assets.get("flame_model")
+        tracked = gagavatar_assets.get("tracked")
+        return cls.from_root(
+            root_path,
+            flame_model_path=resolve_config_path(flame_model, pyproject.parent)
+            if flame_model
+            else None,
+            tracked_path=resolve_config_path(tracked, pyproject.parent)
+            if tracked
+            else None,
         )
 
     @classmethod
@@ -167,10 +132,8 @@ def find_pyproject(start: Path) -> Path:
 
 
 def load_pyproject(path: Path) -> dict[str, Any]:
-    if tomllib is not None:
-        with path.open("rb") as f:
-            return tomllib.load(f)
-    return parse_asset_tables(path.read_text())
+    with path.open("rb") as f:
+        return tomllib.load(f)
 
 
 def resolve_config_path(value: str | Path, base_dir: Path) -> Path:
@@ -184,31 +147,6 @@ def resolve_optional_path(value: str | Path | None) -> Path | None:
     if value is None:
         return None
     return Path(value).expanduser().resolve()
-
-
-def parse_asset_tables(text: str) -> dict[str, Any]:
-    data: dict[str, Any] = {"tool": {}}
-    current: list[str] = []
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("[") and line.endswith("]"):
-            current = [part.strip() for part in line[1:-1].split(".")]
-            continue
-        if current not in (["tool", "artalk", "assets"], ["tool", "gagavatar", "assets"]):
-            continue
-        if "=" not in line:
-            continue
-        key, value = [part.strip() for part in line.split("=", 1)]
-        value = value.split("#", 1)[0].strip()
-        if len(value) < 2 or value[0] not in ("'", '"') or value[-1] != value[0]:
-            continue
-        table: dict[str, Any] = data
-        for part in current:
-            table = table.setdefault(part, {})
-        table[key] = value[1:-1]
-    return data
 
 
 def load_asset_manifest() -> dict[str, Any]:
@@ -282,9 +220,10 @@ def asset_download_url(asset: dict[str, Any]) -> str:
     return f"https://huggingface.co/{repo_id}/resolve/{revision}/{filename}?download=true"
 
 
-def download_file(url: str, destination: Path) -> None:
-    with urllib.request.urlopen(url) as response, destination.open("wb") as output:
-        shutil.copyfileobj(response, output, length=1024 * 1024)
+def download_file(url: str, destination: Path, timeout_s: float = 60.0) -> None:
+    with urllib.request.urlopen(url, timeout=timeout_s) as response:
+        with destination.open("wb") as output:
+            shutil.copyfileobj(response, output, length=1024 * 1024)
 
 
 def verify_asset(path: Path, asset: dict[str, Any]) -> None:
