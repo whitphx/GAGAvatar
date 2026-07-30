@@ -105,21 +105,21 @@ class GAGAvatar(nn.Module):
                 k:torch.cat([gs_params_g[k], gs_params_l0[k], gs_params_l1[k]], dim=1) for k in gs_params_g.keys()
             }
             self._gs_params = gs_params
-        gs_params = self._expand_cached_gaussians(self._gs_params, batch['t_points'].shape[0])
         t_points = batch['t_points']
-        gs_params['xyz'][:, :5023] = t_points
+        batch_size = t_points.shape[0]
+        cached = self._gs_params
+        # xyz is overwritten per driving frame below, so it needs a real copy
+        # per batch element; the other parameters are identical across frames
+        # and the rasterizer consumes per-element views, so zero-copy expanded
+        # views suffice.
+        xyz = cached['xyz'].expand(batch_size, -1, -1).clone()
+        xyz[:, :5023] = t_points
+        gs_params = {
+            key: value.expand(batch_size, *value.shape[1:])
+            for key, value in cached.items() if key != 'xyz'
+        }
+        gs_params['xyz'] = xyz
         return gs_params
-
-    def _expand_cached_gaussians(self, gs_params, batch_size):
-        expanded = {}
-        for key, value in gs_params.items():
-            if value.shape[0] == batch_size:
-                expanded[key] = value.clone()
-                continue
-            if value.shape[0] < 1:
-                raise ValueError(f"Cannot expand empty gaussian parameter: {key}")
-            expanded[key] = value[:1].expand(batch_size, *value.shape[1:]).clone()
-        return expanded
 
     def calc_metrics(self, results):
         loss_fn = nn.functional.l1_loss
