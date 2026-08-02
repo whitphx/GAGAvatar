@@ -44,10 +44,13 @@ class GAGAvatarRuntimeConfig:
     # rasterizer is fp32-only, so rendering decomposes around it; None keeps
     # the original single fp32 forward.
     autocast_dtype: str | None = None
-    # torch.compile mode for the upsampler (the largest conv block on the
-    # per-frame path), e.g. "reduce-overhead". Applied only on GPUs with
-    # compute capability >= 7.0 — the triton backend does not support
-    # Pascal — and silently kept eager otherwise.
+    # Launch-overhead reduction for the upsampler (the largest conv block on
+    # the per-frame path). "cuda-graph" captures its kernel sequence with
+    # torch.cuda.CUDAGraph and replays it per call — works on any CUDA GPU
+    # and any torch. torch.compile modes (e.g. "reduce-overhead") are also
+    # accepted on compute capability >= 7.0, but inductor in torch 2.4
+    # cannot compile the upsampler's interpolate calls (FunctionalTensor
+    # bug), so "cuda-graph" is the working choice there too.
     compile_mode: str | None = None
 
     def resolved_assets(self) -> GAGAvatarAssets:
@@ -70,6 +73,43 @@ class GAGAvatarRuntimeConfig:
         return self.resolved_assets().flame_model_path
 
 
+class CudaGraphReplay(torch.nn.Module):
+    """Capture the wrapped module's kernel sequence once per input shape and
+    replay it on later calls, collapsing per-op launch overhead into a single
+    graph launch. The wrapped module must be shape-deterministic and
+    side-effect-free (inference mode)."""
+
+    def __init__(self, module: torch.nn.Module):
+        super().__init__()
+        self.module = module
+        self._graphs: dict[tuple, tuple] = {}
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        key = (tuple(x.shape), x.dtype)
+        entry = self._graphs.get(key)
+        if entry is None:
+            # Warm up on a side stream so capture sees a quiet allocator,
+            # then record with static input/output buffers.
+            stream = torch.cuda.Stream()
+            stream.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(stream):
+                for _ in range(2):
+                    self.module(x)
+            torch.cuda.current_stream().wait_stream(stream)
+            static_in = x.clone()
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                static_out = self.module(static_in)
+            entry = (graph, static_in, static_out)
+            self._graphs[key] = entry
+        graph, static_in, static_out = entry
+        static_in.copy_(x)
+        graph.replay()
+        # The static output is overwritten by the next replay; hand the
+        # caller its own copy.
+        return static_out.clone()
+
+
 class GAGAvatarRuntime:
     """Reusable GAGAvatar runtime for ARTalk motion outputs."""
 
@@ -90,14 +130,13 @@ class GAGAvatarRuntime:
             no_lmks=True,
             model_path=self.assets.flame_model_path,
         ).to(self.device)
-        if (
-            config.compile_mode is not None
-            and self.device.type == "cuda"
-            and torch.cuda.get_device_capability(self.device) >= (7, 0)
-        ):
-            self.model.upsampler = torch.compile(
-                self.model.upsampler, mode=config.compile_mode
-            )
+        if config.compile_mode is not None and self.device.type == "cuda":
+            if config.compile_mode == "cuda-graph":
+                self.model.upsampler = CudaGraphReplay(self.model.upsampler)
+            elif torch.cuda.get_device_capability(self.device) >= (7, 0):
+                self.model.upsampler = torch.compile(
+                    self.model.upsampler, mode=config.compile_mode
+                )
         self.tracked_avatars = self._load_tracked_avatars(self.assets.tracked_path)
         self._tracked_avatar = None
         self._tracked_name = None
