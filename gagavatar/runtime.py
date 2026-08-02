@@ -83,24 +83,28 @@ class CudaGraphReplay(torch.nn.Module):
         super().__init__()
         self.module = module
         self._graphs: dict[tuple, tuple] = {}
+        self._capture_failed = False
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self._capture_failed:
+            return self.module(x)
         key = (tuple(x.shape), x.dtype)
         entry = self._graphs.get(key)
         if entry is None:
-            # Warm up on a side stream so capture sees a quiet allocator,
-            # then record with static input/output buffers.
-            stream = torch.cuda.Stream()
-            stream.wait_stream(torch.cuda.current_stream())
-            with torch.cuda.stream(stream):
-                for _ in range(2):
-                    self.module(x)
-            torch.cuda.current_stream().wait_stream(stream)
-            static_in = x.clone()
-            graph = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(graph):
-                static_out = self.module(static_in)
-            entry = (graph, static_in, static_out)
+            try:
+                entry = self._capture(x)
+            except Exception:
+                # An optimization must never take the process down: fall
+                # back to eager permanently for this module.
+                self._capture_failed = True
+                self._graphs.clear()
+                import traceback
+
+                print(
+                    "[gagavatar] CUDA graph capture failed; continuing eager:\n"
+                    + traceback.format_exc(limit=3)
+                )
+                return self.module(x)
             self._graphs[key] = entry
         graph, static_in, static_out = entry
         static_in.copy_(x)
@@ -108,6 +112,27 @@ class CudaGraphReplay(torch.nn.Module):
         # The static output is overwritten by the next replay; hand the
         # caller its own copy.
         return static_out.clone()
+
+    def _capture(self, x: torch.Tensor) -> tuple:
+        # Quiesce the whole device first: capture aborts if other in-flight
+        # work interleaves, and callers may run with stage syncs disabled.
+        torch.cuda.synchronize()
+        # Warm up on a side stream so capture sees a settled allocator,
+        # then record with static input/output buffers. thread_local error
+        # mode tolerates other threads touching CUDA mid-capture, which is
+        # normal inside a threaded server process.
+        stream = torch.cuda.Stream()
+        stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(stream):
+            for _ in range(2):
+                self.module(x)
+        torch.cuda.current_stream().wait_stream(stream)
+        torch.cuda.synchronize()
+        static_in = x.clone()
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph, capture_error_mode="thread_local"):
+            static_out = self.module(static_in)
+        return (graph, static_in, static_out)
 
 
 class GAGAvatarRuntime:
