@@ -44,6 +44,11 @@ class GAGAvatarRuntimeConfig:
     # rasterizer is fp32-only, so rendering decomposes around it; None keeps
     # the original single fp32 forward.
     autocast_dtype: str | None = None
+    # torch.compile mode for the upsampler (the largest conv block on the
+    # per-frame path), e.g. "reduce-overhead". Applied only on GPUs with
+    # compute capability >= 7.0 — the triton backend does not support
+    # Pascal — and silently kept eager otherwise.
+    compile_mode: str | None = None
 
     def resolved_assets(self) -> GAGAvatarAssets:
         if self.assets is not None:
@@ -85,6 +90,14 @@ class GAGAvatarRuntime:
             no_lmks=True,
             model_path=self.assets.flame_model_path,
         ).to(self.device)
+        if (
+            config.compile_mode is not None
+            and self.device.type == "cuda"
+            and torch.cuda.get_device_capability(self.device) >= (7, 0)
+        ):
+            self.model.upsampler = torch.compile(
+                self.model.upsampler, mode=config.compile_mode
+            )
         self.tracked_avatars = self._load_tracked_avatars(self.assets.tracked_path)
         self._tracked_avatar = None
         self._tracked_name = None
