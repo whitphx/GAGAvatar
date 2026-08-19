@@ -193,3 +193,15 @@ def reselect_eyes(vertices, lmks70):
     cur_eye = cur_eye[:, eye_in_shape_reduce]
     lmks70[:, [37,38,40,41,43,44,46,47]] = cur_eye[:, [1,2,4,5,7,8,10,11]]
     return lmks70
+
+
+# Vertex indices of the forehead region on the 5023-vertex FLAME head.
+# From the GAGAvatar driving code in xg-chu/ARTalk (GAGAvatar/models.py),
+# where these vertices are smoothed across frames to stabilize the forehead
+# under per-frame expression codes.
+FOREHEAD_VERTEX_INDICES = [
+    2168, 2165, 3068, 2199, 2196, 3720, 2091, 2088, 3524, 625, 628, 3871, 705, 708, 2030, 667, 670,
+    3708, 3706, 3729, 3721, 3773, 3789, 3735, 3732, 3786, 3876, 3878, 3913, 3899, 3872, 3874, 3864, 3865,
+    3158, 3157, 336, 335, 3153, 3705, 2177, 2176, 3540, 671, 672, 3863, 2134, 16, 17, 2138, 2139,
+    2567, 2566, 337, 338, 3154, 3712, 2178, 2179, 3495, 674, 673, 3868, 2135, 27, 18, 1429, 1430,
+]

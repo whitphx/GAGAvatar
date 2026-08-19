@@ -108,14 +108,17 @@ class GAGAvatar(nn.Module):
         t_points = batch['t_points']
         batch_size = t_points.shape[0]
         cached = self._gs_params
-        # xyz is overwritten per driving frame below, so it needs a real copy
-        # per batch element; the other parameters are identical across frames
-        # and the rasterizer consumes per-element views, so zero-copy expanded
-        # views suffice.
-        xyz = cached['xyz'].expand(batch_size, -1, -1).clone()
+        # The cache is built at whatever batch size the first call used, and
+        # later calls may use a different one (a chunk's tail renders as a
+        # smaller remainder batch), so expand from a single element. xyz is
+        # overwritten per driving frame below and needs a real copy per batch
+        # element; the other parameters are identical across frames and the
+        # rasterizer consumes per-element views, so zero-copy expanded views
+        # suffice.
+        xyz = cached['xyz'][:1].expand(batch_size, -1, -1).clone()
         xyz[:, :5023] = t_points
         gs_params = {
-            key: value.expand(batch_size, *value.shape[1:])
+            key: value[:1].expand(batch_size, *value.shape[1:])
             for key, value in cached.items() if key != 'xyz'
         }
         gs_params['xyz'] = xyz
