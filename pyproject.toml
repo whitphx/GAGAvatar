@@ -9,12 +9,12 @@ description = "GAGAvatar: Generalizable and Animatable Gaussian Head Avatar"
 readme = "README.md"
 requires-python = ">=3.11"
 
-[project.scripts]
-gagavatar-assets = "gagavatar.assets:main"
-
 [tool.setuptools.packages.find]
 include = ["gagavatar*"]
 namespaces = true
+
+[project.scripts]
+gagavatar-assets = "gagavatar.assets:main"
 
 [tool.setuptools.package-data]
 gagavatar = ["assets_manifest.json"]

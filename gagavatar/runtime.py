@@ -21,7 +21,7 @@ import torchvision
 from pytorch3d.transforms import axis_angle_to_matrix
 
 from gagavatar.assets import GAGAvatarAssets
-from gagavatar.libs.flame_model import FLAMEModel
+from gagavatar.libs.flame_model import FLAMEModel, FOREHEAD_VERTEX_INDICES
 from gagavatar.libs.utils_renderer import render_gaussian
 from gagavatar.models import GAGAvatar
 
@@ -237,8 +237,8 @@ class GAGAvatarRuntime:
             expression_params=exp_code,
             eye_pose_params=pose_code.new_zeros(motion_code.shape[0], 6),
         ).float()
-        t_points[:, FOREHEAD_INDICES] = self._smooth_upper_points(
-            t_points[:, FOREHEAD_INDICES]
+        t_points[:, FOREHEAD_VERTEX_INDICES] = self._smooth_upper_points(
+            t_points[:, FOREHEAD_VERTEX_INDICES]
         )
         feature_batch["t_points"] = t_points
         feature_batch["t_transform"][:, :3, :3] = transform_emoca_to_p3d(motion_code[:, 100:103])[:, :3, :3]
@@ -385,10 +385,3 @@ def transform_emoca_to_p3d(emoca_base_rotation: torch.Tensor) -> torch.Tensor:
     emoca_base_matrix = emoca_base_matrix.inverse()
     return torch.cat([emoca_base_matrix, initial_trans.reshape(1, -1, 1).repeat(batch_size, 1, 1)], dim=-1)
 
-
-FOREHEAD_INDICES = [
-    2168, 2165, 3068, 2199, 2196, 3720, 2091, 2088, 3524, 625, 628, 3871, 705, 708, 2030, 667, 670,
-    3708, 3706, 3729, 3721, 3773, 3789, 3735, 3732, 3786, 3876, 3878, 3913, 3899, 3872, 3874, 3864, 3865,
-    3158, 3157, 336, 335, 3153, 3705, 2177, 2176, 3540, 671, 672, 3863, 2134, 16, 17, 2138, 2139,
-    2567, 2566, 337, 338, 3154, 3712, 2178, 2179, 3495, 674, 673, 3868, 2135, 27, 18, 1429, 1430,
-]
