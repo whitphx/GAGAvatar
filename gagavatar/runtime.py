@@ -39,6 +39,14 @@ class GAGAvatarRuntimeConfig:
     device: str = "auto"
     point_plane_size: int = 296
     flame_scale: float = 5.0
+    # Launch-overhead reduction for the upsampler (the largest conv block on
+    # the per-frame path). "cuda-graph" captures its kernel sequence with
+    # torch.cuda.CUDAGraph and replays it per call — works on any CUDA GPU
+    # and any torch. torch.compile modes (e.g. "reduce-overhead") are also
+    # accepted on compute capability >= 7.0, but inductor in torch 2.4
+    # cannot compile the upsampler's interpolate calls (FunctionalTensor
+    # bug), so "cuda-graph" is the working choice there too.
+    compile_mode: str | None = None
 
     def resolved_assets(self) -> GAGAvatarAssets:
         if self.assets is not None:
@@ -58,6 +66,71 @@ class GAGAvatarRuntimeConfig:
 
     def resolved_flame_model_path(self) -> Path | None:
         return self.resolved_assets().flame_model_path
+
+
+
+
+
+class CudaGraphReplay(torch.nn.Module):
+    """Capture the wrapped module's kernel sequence once per input shape and
+    replay it on later calls, collapsing per-op launch overhead into a single
+    graph launch. The wrapped module must be shape-deterministic and
+    side-effect-free (inference mode)."""
+
+    def __init__(self, module: torch.nn.Module):
+        super().__init__()
+        self.module = module
+        self._graphs: dict[tuple, tuple] = {}
+        self._capture_failed = False
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self._capture_failed:
+            return self.module(x)
+        key = (tuple(x.shape), x.dtype)
+        entry = self._graphs.get(key)
+        if entry is None:
+            try:
+                entry = self._capture(x)
+            except Exception:
+                # An optimization must never take the process down: fall
+                # back to eager permanently for this module.
+                self._capture_failed = True
+                self._graphs.clear()
+                import traceback
+
+                print(
+                    "[gagavatar] CUDA graph capture failed; continuing eager:\n"
+                    + traceback.format_exc(limit=3)
+                )
+                return self.module(x)
+            self._graphs[key] = entry
+        graph, static_in, static_out = entry
+        static_in.copy_(x)
+        graph.replay()
+        # The static output is overwritten by the next replay; hand the
+        # caller its own copy.
+        return static_out.clone()
+
+    def _capture(self, x: torch.Tensor) -> tuple:
+        # Quiesce the whole device first: capture aborts if other in-flight
+        # work interleaves, and callers may run with stage syncs disabled.
+        torch.cuda.synchronize()
+        # Warm up on a side stream so capture sees a settled allocator,
+        # then record with static input/output buffers. thread_local error
+        # mode tolerates other threads touching CUDA mid-capture, which is
+        # normal inside a threaded server process.
+        stream = torch.cuda.Stream()
+        stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(stream):
+            for _ in range(2):
+                self.module(x)
+        torch.cuda.current_stream().wait_stream(stream)
+        torch.cuda.synchronize()
+        static_in = x.clone()
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph, capture_error_mode="thread_local"):
+            static_out = self.module(static_in)
+        return (graph, static_in, static_out)
 
 
 class GAGAvatarRuntime:
@@ -80,6 +153,13 @@ class GAGAvatarRuntime:
             no_lmks=True,
             model_path=self.assets.flame_model_path,
         ).to(self.device)
+        if config.compile_mode is not None and self.device.type == "cuda":
+            if config.compile_mode == "cuda-graph":
+                self.model.upsampler = CudaGraphReplay(self.model.upsampler)
+            elif torch.cuda.get_device_capability(self.device) >= (7, 0):
+                self.model.upsampler = torch.compile(
+                    self.model.upsampler, mode=config.compile_mode
+                )
         self.tracked_avatars = self._load_tracked_avatars(self.assets.tracked_path)
         self._tracked_avatar = None
         self._tracked_name = None
