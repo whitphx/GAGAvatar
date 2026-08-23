@@ -39,6 +39,11 @@ class GAGAvatarRuntimeConfig:
     device: str = "auto"
     point_plane_size: int = 296
     flame_scale: float = 5.0
+    # Run the convolutional stages (gaussian generation, upsampler) under
+    # torch.autocast with this dtype ("float16" / "bfloat16"). The Gaussian
+    # rasterizer is fp32-only, so rendering decomposes around it; None keeps
+    # the original single fp32 forward.
+    autocast_dtype: str | None = None
 
     def resolved_assets(self) -> GAGAvatarAssets:
         if self.assets is not None:
@@ -215,7 +220,26 @@ class GAGAvatarRuntime:
 
     @torch.no_grad()
     def render_rgb_batch(self, batch: dict) -> torch.Tensor:
-        return self.model.forward_expression(batch)["sr_gen_image"].clamp(0, 1)
+        if self.config.autocast_dtype is None:
+            return self.model.forward_expression(batch)["sr_gen_image"].clamp(0, 1)
+        # Mixed-precision path: same stages as model.forward_expression, but
+        # decomposed so the fp32-only Gaussian rasterizer sits outside the
+        # autocast region.
+        dtype = getattr(torch, self.config.autocast_dtype)
+        with torch.autocast(self.device.type, dtype=dtype):
+            gs_params = self.model.forward_gaussians(batch)
+        gs_params = {
+            key: value.float() if torch.is_tensor(value) else value
+            for key, value in gs_params.items()
+        }
+        gen_images = render_gaussian(
+            gs_params=gs_params,
+            cam_matrix=batch["t_transform"].float(),
+            cam_params=self.model.cam_params,
+        )["images"]
+        with torch.autocast(self.device.type, dtype=dtype):
+            sr_gen_images = self.model.upsampler(gen_images)
+        return sr_gen_images.float().clamp(0, 1)
 
     @torch.no_grad()
     def render_rgb_frame(self, motion_frame: torch.Tensor) -> torch.Tensor:
