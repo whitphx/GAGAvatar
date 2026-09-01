@@ -207,8 +207,10 @@ class GAGAvatarRuntime:
     @torch.no_grad()
     def build_forward_batch(self, motion_code: torch.Tensor) -> dict:
         tracked = self._require_tracked_avatar()
-        if motion_code.dim() != 2:
-            raise ValueError(f"motion_code must be (N, 106), got {tuple(motion_code.shape)}")
+        if motion_code.dim() != 2 or motion_code.shape[-1] not in (106, 108):
+            raise ValueError(
+                f"motion_code must be (N, 106) or (N, 108), got {tuple(motion_code.shape)}"
+            )
         motion_code = motion_code.to(self.device)
         if self._feature_batch is None:
             feature_batch = {}
@@ -229,19 +231,33 @@ class GAGAvatarRuntime:
             self._shape_code = tracked["shapecode"][None].to(self.device)
 
         feature_batch = self._expand_feature_batch(motion_code.shape[0])
+        n = motion_code.shape[0]
         exp_code = motion_code[:, :100]
-        pose_code = torch.cat([motion_code.new_zeros(motion_code.shape[0], 3), motion_code[:, 103:]], dim=-1)
+        if motion_code.shape[-1] == 106:
+            # Released layout: gpose3 + jaw3, no eye channel.
+            jaw_code = motion_code[:, 103:]
+            eye_pose = motion_code.new_zeros(n, 6)
+        else:
+            # Training-code layout: gpose3 + jaw1 + eye4; per-eye pitch/yaw
+            # expand to FLAME's 6-dim eye pose with zeroed third components.
+            jaw_code = torch.cat(
+                [motion_code[:, 103:104], motion_code.new_zeros(n, 2)], dim=-1
+            )
+            e = motion_code[:, 104:108]
+            zero = motion_code.new_zeros(n, 1)
+            eye_pose = torch.cat([e[:, 0:2], zero, e[:, 2:4], zero], dim=-1)
+        pose_code = torch.cat([motion_code.new_zeros(n, 3), jaw_code], dim=-1)
         t_points = self.flame_model(
-            shape_params=self._shape_code.expand(motion_code.shape[0], -1),
+            shape_params=self._shape_code.expand(n, -1),
             pose_params=pose_code,
             expression_params=exp_code,
-            eye_pose_params=pose_code.new_zeros(motion_code.shape[0], 6),
+            eye_pose_params=eye_pose,
         ).float()
         t_points[:, FOREHEAD_VERTEX_INDICES] = self._smooth_upper_points(
             t_points[:, FOREHEAD_VERTEX_INDICES]
         )
         feature_batch["t_points"] = t_points
-        feature_batch["t_transform"][:, :3, :3] = transform_emoca_to_p3d(motion_code[:, 100:103])[:, :3, :3]
+        feature_batch["t_transform"][:, :3, :3] = transform_emoca_to_p3d(motion_code[:, 100:103])[:, :3, :3]  # gpose sits at 100:103 in both layouts
         return feature_batch
 
     def _expand_feature_batch(self, batch_size: int) -> dict:
