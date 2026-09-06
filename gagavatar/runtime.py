@@ -117,20 +117,33 @@ class CudaGraphReplay(torch.nn.Module):
         # Quiesce the whole device first: capture aborts if other in-flight
         # work interleaves, and callers may run with stage syncs disabled.
         torch.cuda.synchronize()
+        # Callers may run this module under torch.autocast. Its weight-cast
+        # cache must not reach into a capture: the cached casts are freed
+        # when the ambient autocast region exits, while the recorded graph
+        # keeps referencing their storage, corrupting replays after the
+        # next capture reuses it. Re-enter the ambient autocast with the
+        # cache disabled so every cast is recorded inside the capture and
+        # owned by the graph's private pool.
+        autocast = torch.autocast(
+            x.device.type,
+            dtype=torch.get_autocast_gpu_dtype(),
+            enabled=torch.is_autocast_enabled(),
+            cache_enabled=False,
+        )
         # Warm up on a side stream so capture sees a settled allocator,
         # then record with static input/output buffers. thread_local error
         # mode tolerates other threads touching CUDA mid-capture, which is
         # normal inside a threaded server process.
         stream = torch.cuda.Stream()
         stream.wait_stream(torch.cuda.current_stream())
-        with torch.cuda.stream(stream):
+        with torch.cuda.stream(stream), autocast:
             for _ in range(2):
                 self.module(x)
         torch.cuda.current_stream().wait_stream(stream)
         torch.cuda.synchronize()
         static_in = x.clone()
         graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph, capture_error_mode="thread_local"):
+        with torch.cuda.graph(graph, capture_error_mode="thread_local"), autocast:
             static_out = self.module(static_in)
         return (graph, static_in, static_out)
 
