@@ -104,6 +104,13 @@ class CudaGraphReplay(torch.nn.Module):
                     "[gagavatar] CUDA graph capture failed; continuing eager:\n"
                     + traceback.format_exc(limit=3)
                 )
+                # Eager is only a safe fallback once the RNG generator is
+                # confirmed (or restored to) usable: a capture that dies
+                # between begin and end can leave the device's default
+                # generator registered to the dead capture, after which
+                # every sampling op in the process raises "Offset increment
+                # outside graph capture".
+                self._recover_device_rng(x.device)
                 return self.module(x)
             self._graphs[key] = entry
         graph, static_in, static_out = entry
@@ -112,6 +119,30 @@ class CudaGraphReplay(torch.nn.Module):
         # The static output is overwritten by the next replay; hand the
         # caller its own copy.
         return static_out.clone()
+
+    @staticmethod
+    def _recover_device_rng(device: torch.device) -> None:
+        try:
+            torch.randn(1, device=device)
+            return
+        except RuntimeError:
+            pass
+        index = device.index if device.index is not None else torch.cuda.current_device()
+        generator = torch.cuda.default_generators[index]
+        try:
+            # A fresh clone of the generator state carries no capture
+            # registration; swapping it in is the only recovery that
+            # measurably heals the generator (graph.reset(), deleting the
+            # graph, and set_rng_state do not).
+            generator.graphsafe_set_state(generator.clone_state())
+            torch.randn(1, device=device)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "A failed CUDA graph capture left this device's RNG "
+                "generator unusable and recovery did not take. Restart the "
+                "process; run without compile_mode to avoid capture."
+            ) from exc
+        print("[gagavatar] recovered the device RNG generator after a failed capture")
 
     def _capture(self, x: torch.Tensor) -> tuple:
         # Quiesce the whole device first: capture aborts if other in-flight
