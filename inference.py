@@ -3,19 +3,39 @@
 
 import os
 from fractions import Fraction
+from pathlib import Path
 
 import av
 import torch
 import argparse
-import lightning
 import numpy as np
 import torchvision
 from tqdm.rich import tqdm
 
+from gagavatar.assets import GAGAvatarAssets
 from gagavatar.data import DriverData
-from gagavatar.models import build_model
-from gagavatar.libs.utils import ConfigDict
+from gagavatar.runtime import GAGAvatarRuntime, GAGAvatarRuntimeConfig
 from gagavatar.libs.GAGAvatar_track.engines import CoreEngine as TrackEngine
+
+
+def load_runtime(resume_path, device):
+    assets = GAGAvatarAssets(
+        root=Path('./assets'),
+        model_path=Path(resume_path),
+        tracked_path=None,
+        flame_model_path=Path('./assets/FLAME_with_eye.pt'),
+    )
+    return GAGAvatarRuntime(GAGAvatarRuntimeConfig(assets=assets, device=device))
+
+
+def move_to_device(value, device):
+    if torch.is_tensor(value):
+        return value.to(device)
+    if isinstance(value, dict):
+        return {key: move_to_device(item, device) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(move_to_device(item, device) for item in value)
+    return value
 
 def write_video(output_path, video_frames, fps=25):
     # torchvision.io.write_video is incompatible with PyAV >= 13 (float
@@ -37,20 +57,13 @@ def write_video(output_path, video_frames, fps=25):
 
 
 def inference(image_path, driver_path, resume_path, force_retrack=False, device='cuda'):
-    lightning.fabric.seed_everything(42)
+    torch.manual_seed(42)
     driver_path = driver_path[:-1] if driver_path.endswith('/') else driver_path
     driver_name = os.path.basename(driver_path).split('.')[0]
     # load model
     print(f'Loading model...')
-    lightning_fabric = lightning.Fabric(accelerator=device, strategy='auto', devices=[0],)
-    lightning_fabric.launch()
-    full_checkpoint = lightning_fabric.load(resume_path)
-    meta_cfg = ConfigDict(init_dict=full_checkpoint['meta_cfg'])
-    model = build_model(model_cfg=meta_cfg.MODEL)
-    model.load_state_dict(full_checkpoint['model'])
-    model = lightning_fabric.setup(model)
-    model.eval()
-    print(str(meta_cfg))
+    runtime = load_runtime(resume_path, device)
+    model = runtime.model
     track_engine = TrackEngine(focal_length=12.0, device=device)
     # build input data
     feature_name = os.path.basename(image_path).split('.')[0]
@@ -62,7 +75,7 @@ def inference(image_path, driver_path, resume_path, force_retrack=False, device=
     ### ------------ run on demo or tracked images/videos ---------- ###
     if os.path.isdir(driver_path):
         driver_name = os.path.basename(driver_path[:-1] if driver_path.endswith('/') else driver_path)
-        driver_dataset = DriverData(driver_path, feature_data, meta_cfg.DATASET.POINT_PLANE_SIZE)
+        driver_dataset = DriverData(driver_path, feature_data, runtime.config.point_plane_size)
         driver_dataloader = torch.utils.data.DataLoader(driver_dataset, batch_size=1, num_workers=2, shuffle=False)
     else:
         driver_name = os.path.basename(driver_path).split('.')[0]
@@ -70,14 +83,13 @@ def inference(image_path, driver_path, resume_path, force_retrack=False, device=
         if driver_data is None:
             print(f'Finish inference, no face in driver: {image_path}.')
             return
-        driver_dataset = DriverData({driver_name: driver_data}, feature_data, meta_cfg.DATASET.POINT_PLANE_SIZE)
+        driver_dataset = DriverData({driver_name: driver_data}, feature_data, runtime.config.point_plane_size)
         driver_dataloader = torch.utils.data.DataLoader(driver_dataset, batch_size=1, num_workers=2, shuffle=False)
     ### --------- if you need to run on your images online ---------- ###
     # driver_data = track_engine.track_image(your_images, your_image_names) # list of tensor, list of str
-    # driver_dataset = DriverData(driver_data, feature_data, meta_cfg.DATASET.POINT_PLANE_SIZE)
+    # driver_dataset = DriverData(driver_data, feature_data, runtime.config.point_plane_size)
     # driver_dataloader = torch.utils.data.DataLoader(driver_dataset, batch_size=1, num_workers=2, shuffle=False)
 
-    driver_dataloader = lightning_fabric.setup_dataloaders(driver_dataloader)
     # run inference process
     _water_mark_size = (82, 256)
     _water_mark = torchvision.io.read_image('demos/gagavatar_logo.png', mode=torchvision.io.ImageReadMode.RGB_ALPHA).float()/255.0
@@ -89,6 +101,7 @@ def inference(image_path, driver_path, resume_path, force_retrack=False, device=
     # batch['t_transform'] = build_camera(view_angles[idx])
 
     for idx, batch in enumerate(tqdm(driver_dataloader)):
+        batch = move_to_device(batch, runtime.device)
         render_results = model.forward_expression(batch)
         gt_rgb = render_results['t_image'].clamp(0, 1)
         # pred_rgb = render_results['gen_image'].clamp(0, 1)
@@ -96,7 +109,7 @@ def inference(image_path, driver_path, resume_path, force_retrack=False, device=
         pred_sr_rgb = add_water_mark(pred_sr_rgb, _water_mark)
         visulize_rgbs = torchvision.utils.make_grid([gt_rgb[0], pred_sr_rgb[0]], nrow=4, padding=0)
         images.append(visulize_rgbs.cpu())
-    dump_dir = os.path.join('render_results', meta_cfg.MODEL.NAME.split('_')[0])
+    dump_dir = os.path.join('render_results', 'GAGAvatar')
     os.makedirs(dump_dir, exist_ok=True)
     if driver_dataset._is_video:
         dump_path = os.path.join(dump_dir, f'{driver_name}_{feature_name}.mp4')
@@ -195,22 +208,15 @@ def build_camera(angle, ori_transforms=None, device='cuda'):
 def speed_test():
     driver_path = './demos/vfhq_driver'
     resume_path = './assets/GAGAvatar.pt'
-    lightning.fabric.seed_everything(42)
+    torch.manual_seed(42)
     # load model
     print(f'Loading model...')
-    lightning_fabric = lightning.Fabric(accelerator='cuda', strategy='auto', devices=[0],)
-    lightning_fabric.launch()
-    full_checkpoint = lightning_fabric.load(resume_path)
-    meta_cfg = ConfigDict(init_dict=full_checkpoint['meta_cfg'])
-    model = build_model(model_cfg=meta_cfg.MODEL)
-    model.load_state_dict(full_checkpoint['model'])
-    model = lightning_fabric.setup(model)
-    print(str(meta_cfg))
+    runtime = load_runtime(resume_path, 'cuda')
+    model = runtime.model
     # build driver data
     driver_name = os.path.basename(driver_path[:-1] if driver_path.endswith('/') else driver_path)
-    driver_dataset = DriverData(driver_path, None, meta_cfg.DATASET.POINT_PLANE_SIZE)
+    driver_dataset = DriverData(driver_path, None, runtime.config.point_plane_size)
     driver_dataloader = torch.utils.data.DataLoader(driver_dataset, batch_size=1, num_workers=2, shuffle=False)
-    driver_dataloader = lightning_fabric.setup_dataloaders(driver_dataloader)
     # run inference process
     for idx, batch in enumerate(tqdm(driver_dataloader)):
         render_results = model.forward_expression(batch)
